@@ -26,7 +26,7 @@ describe('converts specs', function () {
 
   it('ignores an empty spec', function(done) {
       var converter = new SwaggerSpecConverter();
-      converter.convert({}, {}, function(result) {
+      converter.convert({}, {}, {}, function(result) {
         expect(result).toBe(null);
         done();
       });
@@ -42,7 +42,7 @@ describe('converts specs', function () {
     obj.on.response = function(data) {
       var converter = new SwaggerSpecConverter();
       converter.setDocumentationLocation('http://localhost:8001/v1/api-docs');
-      converter.convert(data.obj, {}, function(swagger) {
+      converter.convert(data.obj, {}, {}, function(swagger) {
         test.array(swagger.tags);
         var petTag = swagger.tags[0];
         var userTag = swagger.tags[1];
@@ -100,7 +100,7 @@ describe('converts specs', function () {
 
         // models
         var definitions = swagger.definitions;
-        expect(Object.keys(definitions).length).toBe(8);
+        expect(Object.keys(definitions).length).toBe(9);
         var pet = definitions.Pet;
         expect(Object.keys(pet.properties).length).toBe(8);
         var photos = pet.properties.photoUrls;
@@ -124,7 +124,8 @@ describe('converts specs', function () {
     obj.on.response = function(data) {
       var converter = new SwaggerSpecConverter();
       converter.setDocumentationLocation('http://localhost:8001/v1/api-docs');
-      converter.convert(data.obj, {}, function(swagger) {
+      converter.convert(data.obj, {}, {}, function(swagger) {
+
         // metadata tests
         expect(swagger.swagger).toBe('2.0');
         test.object(swagger.info);
@@ -205,7 +206,7 @@ describe('converts specs', function () {
     obj.on.response = function(data) {
       var converter = new SwaggerSpecConverter();
       converter.setDocumentationLocation('http://localhost:8001/v1/word.json');
-      converter.convert(data.obj, {}, function(swagger) {
+      converter.convert(data.obj, {}, {}, function(swagger) {
         expect(Object.keys(swagger.paths).length).toBe(12);
 
         var getDefinitions = swagger.paths['/word.{format}/{word}/definitions'].get;
@@ -259,7 +260,7 @@ describe('converts specs', function () {
       obj.on.response = function(data) {
         var converter = new SwaggerSpecConverter();
         converter.setDocumentationLocation('http://localhost:8001/v1/api-docs');
-        converter.convert(data.obj, {}, function(swagger) {
+        converter.convert(data.obj, {}, {}, function(swagger) {
           issuesSpec = swagger;
           done();
         });
@@ -279,7 +280,7 @@ describe('converts specs', function () {
       var operation = spec.paths['/responseModels'].get;
       expect(Object.keys(operation.responses).length).toBe(3); // 200 + 400 + default
 
-      expect(operation.responses['200'].schema).toEqual({'$ref': 'Test'});
+      expect(operation.responses['200'].schema).toEqual({'$ref': '#/definitions/Test'});
       expect(operation.responses['404']).toEqual({description: 'You got no Test'});
 
     });
@@ -294,6 +295,37 @@ describe('converts specs', function () {
       expect(model.required).toBeA(Array);
       expect(model.required).toInclude('one');
 
+    });
+
+    it('makes the expected requests', function(done) {
+      var callCount = 0;
+
+      var interceptor = {
+        requestInterceptor: {
+          apply: function (requestObj) {
+            // rewrites an invalid pet id (-100) to be valid (1)
+            // you can do what you want here, like inject headers, etc.
+            callCount += 1;
+            return requestObj;
+          }
+        }
+      };
+
+      new SwaggerClient({
+        url: 'http://localhost:8001/v1/api-docs.json',
+        usePromise: true,
+        requestInterceptor: interceptor.requestInterceptor
+      }).then(function(client) {
+        var operation = client.apis.pet.operations.getPetById;
+        expect(operation.successResponse[200].definition).toBeAn('object');
+        expect(operation.responses[400].schema).toBeAn('object');
+        expect(operation.responses[400].schema.$ref).toBe('#/definitions/VeryBad');
+        expect(callCount).toEqual(4);
+        done();
+      }).catch(function(e) {
+        console.log(e);
+        done(e);
+      });
     });
   });
 });

@@ -24,6 +24,7 @@ describe('SwaggerClient', function () {
     instance.close();
     done();
   });
+
   /* jshint ignore:end */
   it('ensure externalDocs is attached to the client when available (Issue 276)', function (done) {
     var client = new SwaggerClient({
@@ -41,7 +42,6 @@ describe('SwaggerClient', function () {
     var client;
 
     describe('given a valid spec (or url)', function() {
-
       beforeEach(function() {
         client = new SwaggerClient({
           spec: petstoreRaw,
@@ -62,7 +62,6 @@ describe('SwaggerClient', function () {
           done();
         });
       });
-
     });
 
   });
@@ -325,7 +324,7 @@ describe('SwaggerClient', function () {
     });
   });
 
-  it('should should use a responseInterceptor', function(done) {
+  it('should use a responseInterceptor', function(done) {
     var responseInterceptor = {
       apply: function(data) {
         data.url = 'foo/bar';
@@ -342,6 +341,308 @@ describe('SwaggerClient', function () {
           done();
         });
       }
+    });
+  });
+
+  it('should properly parse an array property', function(done) {
+    var spec = {
+      paths: {
+        '/foo': {
+          get: {
+            operationId: 'myop',
+            tags: [
+                'test'
+            ],
+            parameters: [
+              {
+                in: 'query',
+                name: 'username',
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'a','b'
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    };
+
+    new SwaggerClient({
+      url: 'http://example.com/petstore.yaml',
+      spec: spec,
+      usePromise: true
+    }).then(function(client) {
+      var param = client.test.apis.myop.parameters[0];
+      expect(param.enum).toBe(undefined);
+      expect(param.items.enum).toEqual(['a', 'b']);
+      done();
+    }).catch(function(exception) {
+      done(exception);
+    });
+  });
+
+  it('tests https://github.com/swagger-api/swagger-js/issues/535', function(done) {
+    var spec = {
+      paths: {
+        '/foo': {
+          get: {
+            tags: [ 'foo' ],
+            operationId: 'test',
+            parameters: [
+              {
+                in: 'body',
+                name: 'body',
+                schema: { $ref: '#/definitions/ModelA' }
+              }
+            ]
+          }
+        }
+      },
+      definitions: {
+        ModelA: {
+          required: [ 'modelB' ],
+          properties: {
+            modelB: { $ref: '#/definitions/ModelB' }
+          }
+        },
+        ModelB: {
+          required: [ 'property1', 'property2' ],
+          properties: {
+            property1: { type: 'string', enum: ['a','b'] },
+            property2: { type: 'string' }
+          }
+        }
+      }
+    };
+
+    new SwaggerClient({
+      url: 'http://example.com/petstore.yaml',
+      spec: spec,
+      usePromise: true
+    }).then(function(client) {
+      var param = client.foo.apis.test.parameters[0];
+      var modelA = JSON.parse(param.sampleJSON);
+      expect(modelA).toBeAn('object');
+      expect(modelA.modelB).toBeAn('object');
+
+      var modelB = client.models.ModelB;
+      expect(modelB).toBeAn('object');
+      expect(modelB.definition.properties.property1).toBeAn('object');
+      expect(modelB.definition.properties.property2).toBeAn('object');
+
+      done();
+    }).catch(function(exception) {
+      done(exception);
+    });
+  });
+
+  it('creates unique operationIds per #595', function(done) {
+    var spec = {
+      paths: {
+        '/foo': {
+          get: {
+            operationId: 'test',
+            parameters: [],
+            responses: {
+              'default': {
+                description: 'success'
+              }
+            }
+          }
+        },
+        '/bar': {
+          get: {
+            operationId: 'test',
+            parameters: [],
+            responses: {
+              'default': {
+                description: 'success'
+              }
+            }
+          }
+        }
+      }
+    };
+    new SwaggerClient({
+      url: 'http://example.com/petstore.yaml',
+      spec: spec,
+      usePromise: true
+    }).then(function (client) {
+      expect(client.default.test).toBeA('function');
+      expect(client.default.test_0).toBeAn('function');
+      done();
+    }).catch(function (exception) {
+      done(exception);
+    });
+  });
+
+  it('applies both a request and response interceptor per #601 with promises', function(done) {
+    var startTime = 0;
+    var elapsed = 0;
+
+    var interceptor = {
+      requestInterceptor: {
+        apply: function (requestObj) {
+          startTime = new Date().getTime();
+          return requestObj;
+        }
+      },
+      responseInterceptor: {
+        apply: function (responseObj) {
+          elapsed = new Date().getTime() - startTime;
+          return responseObj;
+        }
+      }
+    };
+
+    new SwaggerClient({
+      url: 'http://petstore.swagger.io/v2/swagger.json',
+      usePromise: true,
+      requestInterceptor: interceptor.requestInterceptor,
+      responseInterceptor: interceptor.responseInterceptor
+    }).then(function(client) {
+      client.pet.getPetById({petId: 1}).then(function (pet){
+        expect(pet.obj).toBeAn('object');
+        expect(elapsed).toBeGreaterThan(0);
+        done();
+      });
+    }).catch(function(exception) {
+      done(exception);
+    });
+  });
+
+  it('passes headers to the request interceptor', function (done) {
+    var spec = {
+      paths: {
+        '/foo': {
+          post: {
+            operationId: 'addFoo',
+            tags: [
+              'nada'
+            ],
+            parameters: [
+              {
+                in: 'header',
+                name: 'username',
+                type: 'string'
+              }
+            ],
+            responses: {
+              '200': {
+                description: 'ok'
+              }
+            }
+          }
+        }
+      }
+    };
+    var interceptor = {
+      requestInterceptor: {
+        apply: function (requestObj) {
+          /**
+           * Verify the payload.  You have the following available in `requestObj`:
+           *
+           * request.Obj.headers          <= map of headers to be sent, includes Content-Type, Accept headers
+           * requestObj.body              <= the content to send, undefined of none
+           * requestObj.method            <= the HTTP operation to execute
+           * requestObj.url               <= the fully resolved URL, including query params, to send
+           * requestObj.on.response       <= success function to execute
+           * requestObj.on.error          <= error function to execute on failure
+           *
+           * NOTE! It is not recommended to override the on.response / on.error functions as it may
+           * interrupt downstream processing in the client.  Use the responseInterceptor pattern instead
+           *
+           **/
+
+          // ensure the headers are present
+          expect(requestObj.headers.username).toBe('bob');
+
+          // rewrite this request to something that'll work locally
+          requestObj.method = 'GET';
+          requestObj.url = 'http://localhost:8000/v2/api/pet/1'
+          return requestObj;
+        }
+      }
+    };
+
+    new SwaggerClient({
+      url: 'http://petstore.swagger.io/v2/swagger.json',
+      spec: spec,
+      usePromise: true,
+      requestInterceptor: interceptor.requestInterceptor
+    }).then(function(client) {
+      client.nada.addFoo({username: 'bob'}).then(function (data){
+        done();
+      });
+    }).catch(function(exception) {
+      done(exception);
+    });
+  });
+
+  it('uses a custom http client implementation', function (done) {
+
+    var spec = {
+      paths: {
+        '/foo': {
+          post: {
+            operationId: 'addFoo',
+            tags: [
+              'nada'
+            ],
+            parameters: [
+              {
+                in: 'header',
+                name: 'username',
+                type: 'string'
+              }
+            ],
+            responses: {
+              '200': {
+                description: 'ok'
+              }
+            }
+          }
+        }
+      }
+    };
+    var myHttpClient = {
+      execute: function(requestObj) {
+        /**
+         * Do your magic here.  When done, you should call the responseObj callback if successful
+         * For this mock client, just make it act async
+         */
+
+        setTimeout(function() {
+          requestObj.on.response({
+            obj: {
+              // payload
+              content: 'it works!'
+            },
+            status: 200,
+            statusText: 'it works!'
+          });
+          // and if something goes wrong call requestObj.on.error and pass the payload
+        }, 1000)
+      }
+    }
+
+    new SwaggerClient({
+      url: 'http://localhost:8000/v2/swagger.json',
+      spec: spec,
+      usePromise: true,
+      client: myHttpClient
+    }).then(function(client) {
+      client.nada.addFoo({username: 'bob'}).then(function (data){
+        expect(data.obj).toBeAn('object');
+        expect(data.status).toBe(200);
+        done();
+      });
+    }).catch(function(exception) {
+      done(exception);
     });
   });
 });
